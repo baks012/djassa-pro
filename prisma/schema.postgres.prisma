@@ -1,0 +1,127 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  client
+  prestataire
+  admin
+}
+
+enum VerificationStatus {
+  NON_VERIFIE
+  EN_ATTENTE
+  VERIFIE
+  REJETE
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  phone        String    @unique @db.VarChar(20)
+  email        String?   @unique @db.VarChar(255)
+  passwordHash String    @db.VarChar(255)
+  role         UserRole  @default(client)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(6)
+
+  profile      Profile?
+  reviewsMade  Review[]  @relation("ClientReviews")
+  auditLogs    AdminAuditLog[]
+
+  @@index([phone])
+  @@index([role])
+}
+
+model Profile {
+  userId        String             @id @db.Uuid
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nom           String             @db.VarChar(80)
+  prenom        String             @db.VarChar(80)
+  commune       String             @db.VarChar(80)
+  quartier      String?            @db.VarChar(100)
+  bio           String?            @db.Text
+  competences   String[]           @default([])
+  photoUrl      String?            @db.Text
+  whatsappNumber String?           @db.VarChar(20)
+  callNumber    String?            @db.VarChar(20)
+  
+  disponible    Boolean            @default(true)
+  estVerifie    Boolean            @default(false)
+  kycStatus     VerificationStatus @default(NON_VERIFIE)
+  
+  ratingAvg     Decimal            @default(0.00) @db.Decimal(3, 2)
+  reviewsCount  Int                @default(0)
+  updatedAt     DateTime           @updatedAt @db.Timestamptz(6)
+
+  services      Service[]
+  reviews       Review[]
+  kycDocuments  KycDocument[]
+
+  @@index([commune, disponible, estVerifie])
+  @@index([estVerifie])
+}
+
+model Service {
+  id            String    @id @default(uuid()) @db.Uuid
+  providerId    String    @db.Uuid
+  provider      Profile   @relation(fields: [providerId], references: [userId], onDelete: Cascade)
+  nom           String    @db.VarChar(120)
+  categorie     String    @db.VarChar(80)
+  prixIndicatif Decimal   @db.Decimal(12, 2)
+  description   String?   @db.Text
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+
+  @@index([categorie])
+  @@index([providerId])
+}
+
+model Review {
+  id          String    @id @default(uuid()) @db.Uuid
+  providerId  String    @db.Uuid
+  provider    Profile   @relation(fields: [providerId], references: [userId], onDelete: Cascade)
+  clientId    String    @db.Uuid
+  client      User      @relation("ClientReviews", fields: [clientId], references: [id], onDelete: Cascade)
+  note        Int
+  commentaire String?   @db.Text
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@unique([providerId, clientId])
+  @@index([providerId])
+}
+
+model KycDocument {
+  id              String             @id @default(uuid()) @db.Uuid
+  providerId      String             @db.Uuid
+  provider        Profile            @relation(fields: [providerId], references: [userId], onDelete: Cascade)
+  typePiece       String             @db.VarChar(50)
+  numeroPiece     String?            @db.VarChar(80)
+  documentUrl     String             @db.Text
+  statut          VerificationStatus @default(EN_ATTENTE)
+  motifRejet      String?            @db.Text
+  createdAt       DateTime           @default(now()) @db.Timestamptz(6)
+  reviewedAt      DateTime?          @db.Timestamptz(6)
+
+  @@index([statut])
+  @@index([providerId])
+}
+
+model AdminAuditLog {
+  id          String    @id @default(uuid()) @db.Uuid
+  adminId     String    @db.Uuid
+  admin       User      @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  action      String    @db.VarChar(80)
+  targetId    String    @db.Uuid
+  details     Json?
+  ipAddress   String?   @db.VarChar(45)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([adminId])
+}

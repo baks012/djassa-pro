@@ -1,0 +1,113 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String    @id @default(uuid())
+  phone        String    @unique
+  email        String?   @unique
+  passwordHash String
+  role         String    @default("client") // "client", "prestataire", "admin"
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  profile      Profile?
+  reviewsMade  Review[]  @relation("ClientReviews")
+  auditLogs    AdminAuditLog[]
+
+  @@index([phone])
+  @@index([role])
+}
+
+model Profile {
+  userId        String             @id
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nom           String
+  prenom        String
+  commune       String
+  quartier      String?
+  bio           String?
+  competences   String             @default("[]") // Stocké en JSON
+  photoUrl      String?
+  whatsappNumber String?
+  callNumber    String?
+  
+  disponible    Boolean            @default(true)
+  estVerifie    Boolean            @default(false)
+  kycStatus     String             @default("NON_VERIFIE")
+  
+  ratingAvg     Float              @default(0.0)
+  reviewsCount  Int                @default(0)
+  updatedAt     DateTime           @updatedAt
+
+  services      Service[]
+  reviews       Review[]
+  kycDocuments  KycDocument[]
+
+  @@index([commune, disponible, estVerifie])
+  @@index([estVerifie])
+}
+
+model Service {
+  id            String    @id @default(uuid())
+  providerId    String
+  provider      Profile   @relation(fields: [providerId], references: [userId], onDelete: Cascade)
+  nom           String
+  categorie     String
+  prixIndicatif Float
+  description   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([categorie])
+  @@index([providerId])
+}
+
+model Review {
+  id          String    @id @default(uuid())
+  providerId  String
+  provider    Profile   @relation(fields: [providerId], references: [userId], onDelete: Cascade)
+  clientId    String
+  client      User      @relation("ClientReviews", fields: [clientId], references: [id], onDelete: Cascade)
+  note        Int
+  commentaire String?
+  createdAt   DateTime  @default(now())
+
+  @@unique([providerId, clientId])
+  @@index([providerId])
+}
+
+model KycDocument {
+  id              String             @id @default(uuid())
+  providerId      String
+  provider        Profile            @relation(fields: [providerId], references: [userId], onDelete: Cascade)
+  typePiece       String
+  numeroPiece     String?
+  documentUrl     String
+  statut          String             @default("EN_ATTENTE")
+  motifRejet      String?
+  createdAt       DateTime           @default(now())
+  reviewedAt      DateTime?
+
+  @@index([statut])
+  @@index([providerId])
+}
+
+model AdminAuditLog {
+  id          String    @id @default(uuid())
+  adminId     String
+  admin       User      @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  action      String
+  targetId    String
+  details     String?
+  ipAddress   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([adminId])
+}
