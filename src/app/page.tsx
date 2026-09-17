@@ -33,29 +33,46 @@ import { supabaseAdmin } from "@/lib/supabase";
 
 async function getFeaturedProviders(): Promise<Provider[]> {
   try {
-    const { data, error } = await supabaseAdmin
+    const { data: dbProviders, error } = await supabaseAdmin
       .from("active_providers_view")
       .select("*")
+      .order("created_at", { ascending: false })
       .limit(6);
 
-    if (!error && data) {
-      return data.map((row: any) => ({
-        id: row.user_id,
-        nom: row.nom,
-        prenom: row.prenom,
-        commune: row.commune,
-        quartier: row.quartier,
-        specialite: row.specialite || (row.competences && row.competences[0]) || "Artisan Pro",
-        note: Number(row.rating_avg) || 5.0,
-        avisCount: row.reviews_count || 0,
-        prixIndicatif: Number(row.prix_indicatif) || 5000,
-        photoUrl: row.photo_url || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80",
-        estVerifie: Boolean(row.est_verifie),
-        disponible: Boolean(row.disponible),
-        whatsappNumber: row.whatsapp_number || "0700000000",
-        callNumber: row.call_number || row.whatsapp_number,
-        competences: row.competences || [],
-      }));
+    if (!error && dbProviders && dbProviders.length > 0) {
+      const providerIds = dbProviders.map((p) => p.id || p.user_id).filter(Boolean);
+      let dbServices: any[] = [];
+
+      if (providerIds.length > 0) {
+        const { data: servicesData } = await supabaseAdmin
+          .from("services")
+          .select("*")
+          .in("provider_id", providerIds);
+        dbServices = servicesData || [];
+      }
+
+      return dbProviders.map((row: any) => {
+        const pId = row.id || row.user_id;
+        const pServices = dbServices.filter((s) => s.provider_id === pId);
+        const mainService = pServices[0];
+        return {
+          id: pId,
+          nom: row.nom,
+          prenom: row.prenom,
+          commune: row.commune,
+          quartier: row.quartier,
+          specialite: mainService?.nom || (row.competences && row.competences[0]) || "Artisan Pro",
+          note: Number(row.rating_avg) || 5.0,
+          avisCount: row.reviews_count || 0,
+          prixIndicatif: Number(mainService?.prix_indicatif) || 5000,
+          photoUrl: row.photo_url || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80",
+          estVerifie: Boolean(row.est_verifie),
+          disponible: Boolean(row.disponible),
+          whatsappNumber: row.whatsapp_number || "0700000000",
+          callNumber: row.call_number || row.whatsapp_number,
+          competences: row.competences || [],
+        };
+      });
     }
   } catch (err) {
     console.warn("[HOMEPAGE_FEATURED] Supabase error:", err);

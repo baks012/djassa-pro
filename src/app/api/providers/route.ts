@@ -15,10 +15,7 @@ export async function GET(request: Request) {
 
     // Récupération directe depuis Supabase
     try {
-      let supabaseQuery = supabaseAdmin
-        .from("active_providers_view")
-        .select("*")
-        .order("est_verifie", { ascending: false });
+      let supabaseQuery = supabaseAdmin.from("active_providers_view").select("*");
 
       if (onlyVerified) {
         supabaseQuery = supabaseQuery.eq("est_verifie", true);
@@ -28,13 +25,15 @@ export async function GET(request: Request) {
         supabaseQuery = supabaseQuery.ilike("commune", `%${commune}%`);
       }
 
+      supabaseQuery = supabaseQuery.order("created_at", { ascending: false });
+
       const { data: dbProviders, error } = await supabaseQuery;
 
       if (!error && dbProviders) {
         // Récupérer les services associés
-        const providerIds = dbProviders.map((p) => p.id);
+        const providerIds = dbProviders.map((p) => p.id || p.user_id).filter(Boolean);
         let dbServices: any[] = [];
-        
+
         if (providerIds.length > 0) {
           const { data: servicesData } = await supabaseAdmin
             .from("services")
@@ -44,13 +43,14 @@ export async function GET(request: Request) {
         }
 
         providers = dbProviders.map((p) => {
-          const services = dbServices.filter((s) => s.provider_id === p.id);
+          const pId = p.id || p.user_id;
+          const services = dbServices.filter((s) => s.provider_id === pId);
           const mainService = services[0];
           return {
-            id: p.id,
+            id: pId,
             nom: p.nom,
             prenom: p.prenom,
-            specialite: mainService?.nom || p.competences?.[0] || "Artisan Pro",
+            specialite: mainService?.nom || (p.competences && p.competences[0]) || "Artisan Pro",
             commune: p.commune,
             quartier: p.quartier,
             bio: p.bio,
@@ -59,8 +59,8 @@ export async function GET(request: Request) {
             photoUrl: p.photo_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&q=80",
             whatsappNumber: p.whatsapp_number || p.phone || "0700000000",
             callNumber: p.call_number || p.phone || p.whatsapp_number,
-            estVerifie: p.est_verifie,
-            disponible: p.disponible,
+            estVerifie: Boolean(p.est_verifie),
+            disponible: Boolean(p.disponible),
             note: Number(p.rating_avg) || 5.0,
             avisCount: Number(p.reviews_count) || 0,
             services: services,
