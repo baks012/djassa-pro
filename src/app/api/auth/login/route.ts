@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { ZodError } from "zod";
-import prisma from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabase";
+import { MockDb } from "@/lib/mock-db";
 import { loginSchema } from "@/features/auth/schemas/auth.schema";
 import { signToken, AUTH_COOKIE_NAME } from "@/lib/auth";
 
@@ -11,27 +12,57 @@ export async function POST(request: Request) {
     const validated = loginSchema.parse(body);
 
     const identifier = validated.identifier.trim();
-    
-    // Recherche par téléphone (normalisé ou non) ou email
-    const user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { phone: identifier },
-          { phone: `+225${identifier.replace(/\D/g, "").slice(-10)}` },
-          { email: identifier.toLowerCase() },
-        ],
-      },
-      include: { profile: true },
-    });
+    const phoneNormalized = `+225${identifier.replace(/\D/g, "").slice(-10)}`;
 
-    if (!user || !user.isActive) {
+    let user: any = null;
+    let profile: any = null;
+
+    // 1. Tenter la recherche dans Supabase
+    try {
+      const { data: dbUsers, error } = await supabaseAdmin
+        .from("users")
+        .select("*")
+        .or(`email.eq.${identifier},phone.eq.${identifier},phone.eq.${phoneNormalized}`)
+        .limit(1);
+
+      if (!error && dbUsers && dbUsers.length > 0) {
+        user = dbUsers[0];
+        const { data: dbProfile } = await supabaseAdmin
+          .from("profiles")
+          .select("*")
+          .eq("user_id", user.id)
+          .single();
+        profile = dbProfile;
+      }
+    } catch (e) {
+      console.warn("Supabase query fallback to local DB:", e);
+    }
+
+    // 2. Fallback MockDb si non trouvé
+    if (!user) {
+      const mockUser = MockDb.findUserByIdentifier(identifier);
+      if (mockUser) {
+        user = mockUser;
+        profile = MockDb.findProfileByUserId(mockUser.id);
+      }
+    }
+
+    if (!user) {
       return NextResponse.json(
         { success: false, message: "Numéro de téléphone/email ou mot de passe incorrect." },
         { status: 401 }
       );
     }
 
-    const isValidPassword = await bcrypt.compare(validated.password, user.passwordHash);
+    if (user.is_active === false) {
+      return NextResponse.json(
+        { success: false, message: "Ce compte a été suspendu ou désactivé par l'administrateur." },
+        { status: 401 }
+      );
+    }
+
+    // Vérification du mot de passe
+    const isValidPassword = await bcrypt.compare(validated.password, user.password_hash);
     if (!isValidPassword) {
       return NextResponse.json(
         { success: false, message: "Numéro de téléphone/email ou mot de passe incorrect." },
@@ -39,12 +70,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const token = signToken({
+    const token = await signToken({
       id: user.id,
-      role: user.role as "client" | "prestataire" | "admin",
+      role: user.role,
       phone: user.phone,
-      nom: user.profile?.nom,
-      prenom: user.profile?.prenom,
+      nom: profile?.nom,
+      prenom: profile?.prenom,
     });
 
     const response = NextResponse.json({
@@ -53,8 +84,8 @@ export async function POST(request: Request) {
       data: {
         id: user.id,
         role: user.role,
-        prenom: user.profile?.prenom || "",
-        nom: user.profile?.nom || "",
+        prenom: profile?.prenom || "",
+        nom: profile?.nom || "",
         phone: user.phone,
       },
     });

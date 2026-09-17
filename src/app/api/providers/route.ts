@@ -1,100 +1,90 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
-import { parseCompetences } from "@/lib/utils";
+import { supabaseAdmin } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const query = searchParams.get("query")?.trim() || "";
+    const query = searchParams.get("query")?.trim().toLowerCase() || "";
     const commune = searchParams.get("commune")?.trim() || "";
     const categorie = searchParams.get("categorie")?.trim() || "";
     const onlyVerified = searchParams.get("onlyVerified") === "true";
 
-    const whereClause: Record<string, unknown> = {
-      user: {
-        isActive: true,
-        role: "prestataire",
-      },
-      disponible: true,
-    };
+    let providers: any[] = [];
 
-    if (onlyVerified) {
-      whereClause.estVerifie = true;
+    // Récupération directe depuis Supabase
+    try {
+      let supabaseQuery = supabaseAdmin
+        .from("active_providers_view")
+        .select("*")
+        .order("est_verifie", { ascending: false });
+
+      if (onlyVerified) {
+        supabaseQuery = supabaseQuery.eq("est_verifie", true);
+      }
+
+      if (commune && commune !== "Toutes les communes") {
+        supabaseQuery = supabaseQuery.ilike("commune", `%${commune}%`);
+      }
+
+      const { data: dbProviders, error } = await supabaseQuery;
+
+      if (!error && dbProviders) {
+        // Récupérer les services associés
+        const providerIds = dbProviders.map((p) => p.id);
+        let dbServices: any[] = [];
+        
+        if (providerIds.length > 0) {
+          const { data: servicesData } = await supabaseAdmin
+            .from("services")
+            .select("*")
+            .in("provider_id", providerIds);
+          dbServices = servicesData || [];
+        }
+
+        providers = dbProviders.map((p) => {
+          const services = dbServices.filter((s) => s.provider_id === p.id);
+          const mainService = services[0];
+          return {
+            id: p.id,
+            nom: p.nom,
+            prenom: p.prenom,
+            specialite: mainService?.nom || p.competences?.[0] || "Artisan Pro",
+            commune: p.commune,
+            quartier: p.quartier,
+            bio: p.bio,
+            competences: p.competences || [],
+            prixIndicatif: Number(mainService?.prix_indicatif) || 5000,
+            photoUrl: p.photo_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&q=80",
+            whatsappNumber: p.whatsapp_number || p.phone || "0700000000",
+            callNumber: p.call_number || p.phone || p.whatsapp_number,
+            estVerifie: p.est_verifie,
+            disponible: p.disponible,
+            note: Number(p.rating_avg) || 5.0,
+            avisCount: Number(p.reviews_count) || 0,
+            services: services,
+          };
+        });
+      }
+    } catch (e) {
+      console.warn("Supabase providers query error:", e);
     }
 
-    if (commune && commune !== "Toutes les communes") {
-      whereClause.commune = {
-        equals: commune,
-        mode: "insensitive",
-      };
+    // Filtrage textuel (Query / Métier)
+    if (query || categorie) {
+      providers = providers.filter((p) => {
+        const fullText = `${p.nom} ${p.prenom} ${p.commune} ${p.quartier || ""} ${p.specialite} ${(p.competences || []).join(" ")}`.toLowerCase();
+        const servicesText = (p.services || []).map((s: any) => `${s.nom} ${s.categorie}`).join(" ").toLowerCase();
+
+        const matchesQuery = !query || fullText.includes(query) || servicesText.includes(query);
+        const matchesCat = !categorie || servicesText.includes(categorie.toLowerCase()) || p.specialite.toLowerCase().includes(categorie.toLowerCase());
+
+        return matchesQuery && matchesCat;
+      });
     }
 
-    if (query) {
-      whereClause.OR = [
-        { nom: { contains: query, mode: "insensitive" } },
-        { prenom: { contains: query, mode: "insensitive" } },
-        { quartier: { contains: query, mode: "insensitive" } },
-        { bio: { contains: query, mode: "insensitive" } },
-        {
-          services: {
-            some: {
-              OR: [
-                { nom: { contains: query, mode: "insensitive" } },
-                { categorie: { contains: query, mode: "insensitive" } },
-              ],
-            },
-          },
-        },
-      ];
-    }
-
-    if (categorie) {
-      whereClause.services = {
-        some: {
-          categorie: { contains: categorie, mode: "insensitive" },
-        },
-      };
-    }
-
-    const profiles = await prisma.profile.findMany({
-      where: whereClause,
-      include: {
-        services: {
-          take: 3,
-        },
-      },
-      orderBy: [
-        { estVerifie: "desc" },
-        { ratingAvg: "desc" },
-      ],
-      take: 50,
-    });
-
-    const formatted = profiles.map((p) => {
-      const competences = parseCompetences(p.competences);
-      return {
-        id: p.userId,
-        nom: p.nom,
-        prenom: p.prenom,
-        specialite: p.services[0]?.nom || competences[0] || "Services divers",
-        commune: p.commune,
-        quartier: p.quartier,
-        bio: p.bio,
-        competences,
-        prixIndicatif: p.services[0] ? Number(p.services[0].prixIndicatif) : 3500,
-        photoUrl: p.photoUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&q=80",
-        whatsappNumber: p.whatsappNumber || "0700000000",
-        callNumber: p.callNumber || p.whatsappNumber,
-        estVerifie: p.estVerifie,
-        disponible: p.disponible,
-        note: Number(p.ratingAvg) || 4.8,
-        avisCount: p.reviewsCount || 10,
-      };
-    });
-
-    return NextResponse.json({ providers: formatted });
+    return NextResponse.json({ providers });
   } catch (error) {
     console.error("[GET_PROVIDERS_ERROR]", error);
     return NextResponse.json(

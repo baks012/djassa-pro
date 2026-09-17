@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Phone, Lock, AlertCircle, Loader2, User } from "lucide-react";
+import { Phone, Lock, AlertCircle, Loader2 } from "lucide-react";
 import { COMMUNES_CI } from "@/lib/security";
 
 export default function RegisterClientPage() {

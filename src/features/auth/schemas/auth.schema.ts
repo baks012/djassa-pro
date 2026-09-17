@@ -34,6 +34,9 @@ export const providerRegisterSchema = z.object({
   competences: z.array(z.string()).min(1, "Ajoutez au moins une compétence clé."),
   prixIndicatif: z.coerce.number().min(500, "Le tarif indicatif minimum est de 500 FCFA."),
   bio: z.string().trim().max(600).optional(),
+  photoUrl: z
+    .string({ required_error: "La photo de profil est obligatoire." })
+    .min(5, "Votre photo de profil est obligatoire pour inspirer confiance aux clients."),
 });
 
 export const clientRegisterSchema = z.object({

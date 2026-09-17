@@ -10,10 +10,11 @@ import {
   Phone,
   CheckCircle2,
   ArrowLeft,
-  Calendar,
 } from "lucide-react";
-import prisma from "@/lib/prisma";
-import { formatFCFA, buildWhatsAppLink, parseCompetences } from "@/lib/utils";
+import { MockDb } from "@/lib/mock-db";
+import { formatFCFA, buildWhatsAppLink } from "@/lib/utils";
+import { ProviderReviewsSection } from "@/components/reviews/ProviderReviewsSection";
+import { supabaseAdmin } from "@/lib/supabase";
 
 interface PageProps {
   params: { id: string };
@@ -21,63 +22,67 @@ interface PageProps {
 
 async function getProvider(id: string) {
   try {
-    const profile = await prisma.profile.findUnique({
-      where: { userId: id },
-      include: {
-        services: true,
-        reviews: {
-          include: {
-            client: {
-              include: {
-                profile: { select: { nom: true, prenom: true } },
-              },
-            },
-          },
-          orderBy: { createdAt: "desc" },
-        },
-      },
-    });
+    // 1. Essai depuis Supabase
+    try {
+      const [{ data: profile }, { data: user }, { data: servicesList }, { data: reviewsData }] =
+        await Promise.all([
+          supabaseAdmin.from("profiles").select("*").eq("user_id", id).maybeSingle(),
+          supabaseAdmin.from("users").select("id, is_active, role").eq("id", id).maybeSingle(),
+          supabaseAdmin.from("services").select("*").eq("provider_id", id),
+          supabaseAdmin.from("reviews").select("*").eq("provider_id", id).order("created_at", { ascending: false }),
+        ]);
 
-    if (!profile) return null;
+      if (profile && (!user || user.is_active !== false) && profile.kyc_status !== "REJETE") {
+        const sList = servicesList || [];
+        const rList = reviewsData || [];
+        const mainService = sList[0];
 
-    const competences = parseCompetences(profile.competences);
+        const reviews = rList.map((r: any) => ({
+          id: r.id,
+          note: r.note,
+          commentaire: r.commentaire,
+          clientName: `${r.client_prenom || "Client"} ${r.client_nom ? r.client_nom.charAt(0) + "." : ""}`,
+          createdAt: new Date(r.created_at).toLocaleDateString("fr-FR"),
+        }));
 
-    return {
-      id: profile.userId,
-      nom: profile.nom,
-      prenom: profile.prenom,
-      specialite: profile.services[0]?.nom || competences[0] || "Artisan",
-      commune: profile.commune,
-      quartier: profile.quartier,
-      bio: profile.bio,
-      competences,
-      prixIndicatif: profile.services[0] ? Number(profile.services[0].prixIndicatif) : 3500,
-      photoUrl: profile.photoUrl || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80",
-      whatsappNumber: profile.whatsappNumber || "0700000000",
-      callNumber: profile.callNumber || profile.whatsappNumber,
-      estVerifie: profile.estVerifie,
-      disponible: profile.disponible,
-      note: Number(profile.ratingAvg) || 5.0,
-      avisCount: profile.reviewsCount || 0,
-      services: profile.services.map((s) => ({
-        id: s.id,
-        nom: s.nom,
-        categorie: s.categorie,
-        prixIndicatif: Number(s.prixIndicatif),
-        description: s.description,
-      })),
-      reviews: profile.reviews.map((r) => ({
-        id: r.id,
-        note: r.note,
-        commentaire: r.commentaire,
-        clientName: `${r.client.profile?.prenom || "Client"} ${r.client.profile?.nom?.charAt(0) || ""}.`,
-        createdAt: r.createdAt.toLocaleDateString("fr-FR"),
-      })),
-    };
+        return {
+          id: profile.user_id,
+          nom: profile.nom,
+          prenom: profile.prenom,
+          specialite: mainService?.nom || (profile.competences && profile.competences[0]) || "Artisan",
+          commune: profile.commune,
+          quartier: profile.quartier,
+          bio: profile.bio,
+          competences: (Array.isArray(profile.competences) ? profile.competences : []) as string[],
+          prixIndicatif: mainService ? Number(mainService.prix_indicatif) : 3500,
+          photoUrl: profile.photo_url || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80",
+          whatsappNumber: profile.whatsapp_number || "0700000000",
+          callNumber: profile.call_number || profile.whatsapp_number,
+          estVerifie: profile.est_verifie,
+          disponible: profile.disponible,
+          note: Number(profile.rating_avg) || 5.0,
+          avisCount: profile.reviews_count || 0,
+          services: sList.map((s: any) => ({
+            id: s.id,
+            nom: s.nom,
+            categorie: s.categorie,
+            prixIndicatif: Number(s.prix_indicatif),
+            description: s.description,
+          })),
+          reviews,
+        };
+      }
+    } catch (dbErr) {
+      console.warn("[PROVIDER_DETAIL] Supabase error:", dbErr);
+    }
+
+    return null;
   } catch {
     return null;
   }
 }
+
+
 
 export default async function ProviderDetailPage({ params }: PageProps) {
   const provider = await getProvider(params.id);
@@ -197,7 +202,7 @@ export default async function ProviderDetailPage({ params }: PageProps) {
             <div className="mt-6 border-t border-slate-100 pt-6">
               <h2 className="text-sm font-bold text-slate-900">Compétences & Savoir-faire</h2>
               <div className="mt-3 flex flex-wrap gap-2">
-                {provider.competences.map((comp) => (
+                {(provider.competences as string[]).map((comp: string) => (
                   <span
                     key={comp}
                     className="inline-flex items-center gap-1.5 rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700"
@@ -245,36 +250,14 @@ export default async function ProviderDetailPage({ params }: PageProps) {
           </div>
         </div>
 
-        {/* Avis des clients */}
-        <div className="mt-6 overflow-hidden rounded-3xl border border-slate-100 bg-white p-6 shadow-sm sm:p-8">
-          <h2 className="text-base font-black text-slate-900 sm:text-lg">
-            Avis clients ({provider.reviews.length})
-          </h2>
-
-          <div className="mt-4 space-y-4">
-            {provider.reviews && provider.reviews.length > 0 ? (
-              provider.reviews.map((rev) => (
-                <div key={rev.id} className="rounded-2xl bg-slate-50 p-4 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-900">{rev.clientName}</span>
-                    <div className="flex items-center gap-1">
-                      <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                      <span className="font-bold text-slate-800">{rev.note}/5</span>
-                    </div>
-                  </div>
-                  {rev.commentaire && (
-                    <p className="mt-2 text-slate-600 leading-relaxed">{rev.commentaire}</p>
-                  )}
-                  <span className="mt-2 block text-[10px] text-slate-400">{rev.createdAt}</span>
-                </div>
-              ))
-            ) : (
-              <p className="text-xs text-slate-400">
-                Soyez le premier client à laisser un avis après votre prestation !
-              </p>
-            )}
-          </div>
-        </div>
+        {/* Section Avis et Retours Clients Interactifs */}
+        <ProviderReviewsSection
+          providerId={provider.id}
+          providerName={`${provider.prenom} ${provider.nom}`}
+          ratingAvg={provider.note}
+          reviewsCount={provider.avisCount}
+          initialReviews={provider.reviews}
+        />
       </div>
     </div>
   );

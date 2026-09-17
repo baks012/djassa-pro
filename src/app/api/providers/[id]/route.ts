@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
-import { parseCompetences } from "@/lib/utils";
+import { MockDb } from "@/lib/mock-db";
 
 export async function GET(
   request: Request,
@@ -9,26 +8,7 @@ export async function GET(
   try {
     const { id } = params;
 
-    const profile = await prisma.profile.findUnique({
-      where: { userId: id },
-      include: {
-        services: true,
-        reviews: {
-          include: {
-            client: {
-              include: {
-                profile: {
-                  select: { nom: true, prenom: true },
-                },
-              },
-            },
-          },
-          orderBy: { createdAt: "desc" },
-          take: 10,
-        },
-      },
-    });
-
+    const profile = MockDb.findProfileByUserId(id);
     if (!profile) {
       return NextResponse.json(
         { success: false, message: "Prestataire introuvable." },
@@ -36,39 +16,43 @@ export async function GET(
       );
     }
 
-    const competences = parseCompetences(profile.competences);
+    const services = MockDb.getServicesByProviderId(id);
+    const reviewsData = MockDb.getReviewsByProviderId(id);
+    const mainService = services[0];
+
+    const reviews = reviewsData.map((r) => ({
+      id: r.id,
+      note: r.note,
+      commentaire: r.commentaire,
+      clientName: `${r.client_prenom || "Client"} ${r.client_nom ? r.client_nom.charAt(0) + "." : ""}`,
+      createdAt: r.created_at,
+    }));
 
     const formatted = {
-      id: profile.userId,
+      id: profile.user_id,
       nom: profile.nom,
       prenom: profile.prenom,
-      specialite: profile.services[0]?.nom || competences[0] || "Artisan qualifié",
+      specialite: mainService?.nom || profile.competences[0] || "Artisan qualifié",
       commune: profile.commune,
       quartier: profile.quartier,
       bio: profile.bio,
-      competences,
-      prixIndicatif: profile.services[0] ? Number(profile.services[0].prixIndicatif) : 5000,
-      photoUrl: profile.photoUrl || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80",
-      whatsappNumber: profile.whatsappNumber || "0700000000",
-      callNumber: profile.callNumber || profile.whatsappNumber,
-      estVerifie: profile.estVerifie,
+      competences: profile.competences,
+      prixIndicatif: mainService ? Number(mainService.prix_indicatif) : 5000,
+      photoUrl: profile.photo_url || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80",
+      whatsappNumber: profile.whatsapp_number || "0700000000",
+      callNumber: profile.call_number || profile.whatsapp_number,
+      estVerifie: profile.est_verifie,
       disponible: profile.disponible,
-      note: Number(profile.ratingAvg) || 5.0,
-      avisCount: profile.reviewsCount || 0,
-      services: profile.services.map((s) => ({
+      note: Number(profile.rating_avg) || 5.0,
+      avisCount: profile.reviews_count || 0,
+      services: services.map((s) => ({
         id: s.id,
         nom: s.nom,
         categorie: s.categorie,
-        prixIndicatif: Number(s.prixIndicatif),
+        prixIndicatif: Number(s.prix_indicatif),
         description: s.description,
       })),
-      reviews: profile.reviews.map((r) => ({
-        id: r.id,
-        note: r.note,
-        commentaire: r.commentaire,
-        clientName: `${r.client.profile?.prenom || "Client"} ${r.client.profile?.nom?.charAt(0) || ""}.`,
-        createdAt: r.createdAt.toISOString(),
-      })),
+      reviews,
     };
 
     return NextResponse.json({ provider: formatted });

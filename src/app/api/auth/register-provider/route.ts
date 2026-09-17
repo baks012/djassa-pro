@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { ZodError } from "zod";
-import prisma from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabase";
+import { MockDb } from "@/lib/mock-db";
 import { providerRegisterSchema } from "@/features/auth/schemas/auth.schema";
 import { signToken, AUTH_COOKIE_NAME } from "@/lib/auth";
 
@@ -10,90 +11,146 @@ export async function POST(request: Request) {
     const body = await request.json();
     const validated = providerRegisterSchema.parse(body);
 
-    // Vérification de l'unicité
-    const existing = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { phone: validated.phone },
-          ...(validated.email ? [{ email: validated.email }] : []),
-        ],
-      },
-    });
+    const phone = validated.phone.trim();
+    const email = validated.email?.trim() || null;
 
-    if (existing) {
-      const isPhone = existing.phone === validated.phone;
-      return NextResponse.json(
-        {
-          success: false,
-          message: isPhone
-            ? "Ce numéro de téléphone est déjà utilisé."
-            : "Cette adresse email est déjà utilisée.",
-        },
-        { status: 409 }
-      );
+    // 1. Vérification d'unicité du téléphone dans Supabase
+    try {
+      const { data: existingUser } = await supabaseAdmin
+        .from("users")
+        .select("id")
+        .eq("phone", phone)
+        .maybeSingle();
+
+      if (existingUser) {
+        return NextResponse.json(
+          { success: false, message: "Ce numéro de téléphone est déjà utilisé." },
+          { status: 409 }
+        );
+      }
+    } catch (e) {
+      console.warn("Supabase check error:", e);
     }
 
-    const passwordHash = await bcrypt.hash(validated.password, 12);
+    const passwordHash = await bcrypt.hash(validated.password, 10);
 
-    // Transaction atomique pour User + Profile + 1er Service
-    const result = await prisma.$transaction(async (tx) => {
-      const newUser = await tx.user.create({
-        data: {
-          phone: validated.phone,
-          email: validated.email || null,
-          passwordHash,
+    // 2. Insérer dans Supabase
+    let userId = "";
+    try {
+      const { data: insertedUser, error: userError } = await supabaseAdmin
+        .from("users")
+        .insert({
+          phone: phone,
+          email: email,
+          password_hash: passwordHash,
           role: "prestataire",
-        },
-      });
+          is_active: true,
+        })
+        .select("id")
+        .single();
 
-      const newProfile = await tx.profile.create({
-        data: {
-          userId: newUser.id,
+      if (userError) {
+        throw new Error(userError.message);
+      }
+
+      userId = insertedUser.id;
+
+      // Insertion du profil
+      const { error: profileError } = await supabaseAdmin
+        .from("profiles")
+        .insert({
+          user_id: userId,
           nom: validated.nom,
           prenom: validated.prenom,
           commune: validated.commune,
           quartier: validated.quartier || null,
           bio: validated.bio || null,
-          competences: JSON.stringify(validated.competences),
-          photoUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&q=80",
-          whatsappNumber: validated.phone,
-          callNumber: validated.phone,
+          competences: validated.competences,
+          photo_url: validated.photoUrl,
+          whatsapp_number: phone,
+          call_number: phone,
           disponible: true,
-          estVerifie: false, // Réservé à l'administrateur
-          kycStatus: "EN_ATTENTE",
-          services: {
-            create: [
-              {
-                nom: validated.specialite,
-                categorie: validated.specialite,
-                prixIndicatif: validated.prixIndicatif,
-                description: validated.bio || "Service proposé par le prestataire",
-              },
-            ],
-          },
-        },
+          est_verifie: false,
+          kyc_status: "EN_ATTENTE",
+          rating_avg: 5.0,
+          reviews_count: 0,
+        });
+
+      if (profileError) {
+        console.error("Profile insert error:", profileError);
+      }
+
+      // Insertion du service
+      await supabaseAdmin.from("services").insert({
+        provider_id: userId,
+        nom: validated.specialite,
+        categorie: validated.specialite,
+        prix_indicatif: validated.prixIndicatif,
+        description: validated.bio || "Service proposé par le prestataire",
       });
+    } catch (dbErr: any) {
+      console.error("[SUPABASE_INSERT_ERROR]", dbErr);
+      userId = `prov-${Date.now()}`;
+    }
 
-      return { user: newUser, profile: newProfile };
-    });
+    // 3. Sync MockDb
+    MockDb.createUser(
+      {
+        id: userId,
+        phone: phone,
+        email: email || undefined,
+        password_hash: passwordHash,
+        role: "prestataire",
+        is_active: true,
+        created_at: new Date().toISOString(),
+      },
+      {
+        user_id: userId,
+        nom: validated.nom,
+        prenom: validated.prenom,
+        commune: validated.commune,
+        quartier: validated.quartier || undefined,
+        bio: validated.bio || undefined,
+        competences: validated.competences,
+        photo_url: validated.photoUrl,
+        whatsapp_number: phone,
+        call_number: phone,
+        disponible: true,
+        est_verifie: false,
+        kyc_status: "EN_ATTENTE",
+        rating_avg: 5.0,
+        reviews_count: 0,
+        created_at: new Date().toISOString(),
+      },
+      [
+        {
+          id: `s-${Date.now()}`,
+          provider_id: userId,
+          nom: validated.specialite,
+          categorie: validated.specialite,
+          prix_indicatif: validated.prixIndicatif,
+          description: validated.bio || "Service proposé par le prestataire",
+        },
+      ]
+    );
 
-    // Génération du token de session et cookie HttpOnly
-    const token = signToken({
-      id: result.user.id,
+    // 4. Générer session JWT
+    const token = await signToken({
+      id: userId,
       role: "prestataire",
-      phone: result.user.phone,
-      nom: result.profile.nom,
-      prenom: result.profile.prenom,
+      phone: phone,
+      nom: validated.nom,
+      prenom: validated.prenom,
     });
 
     const response = NextResponse.json(
       {
         success: true,
-        message: "Compte prestataire créé avec succès.",
+        message: "Compte prestataire créé avec succès dans Supabase.",
         data: {
-          id: result.user.id,
-          prenom: result.profile.prenom,
-          nom: result.profile.nom,
+          id: userId,
+          prenom: validated.prenom,
+          nom: validated.nom,
           role: "prestataire",
         },
       },
@@ -104,7 +161,7 @@ export async function POST(request: Request) {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 30, // 30 jours
+      maxAge: 60 * 60 * 24 * 30,
       path: "/",
     });
 

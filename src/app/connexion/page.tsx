@@ -53,17 +53,17 @@ function LoginForm() {
   return (
     <div className="w-full max-w-md rounded-3xl border border-slate-100 bg-white p-6 shadow-xl shadow-slate-200/50 sm:p-8">
       <div className="text-center">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-600 font-black text-white text-xl">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-600 font-black text-white text-xl shadow-md shadow-emerald-600/20">
           D
         </div>
         <h1 className="mt-4 text-2xl font-black text-slate-900">Connexion</h1>
         <p className="mt-1 text-xs text-slate-500">
-          Accédez à votre compte Djassa Pro (Prestataire ou Client)
+          Accédez à votre compte Djassa Pro
         </p>
       </div>
 
       {error && (
-        <div className="mt-4 flex items-center gap-2 rounded-xl bg-rose-50 p-3 text-xs font-semibold text-rose-700">
+        <div className="mt-5 flex items-center gap-2 rounded-xl bg-rose-50 p-3 text-xs font-semibold text-rose-700">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{error}</span>
         </div>
@@ -72,7 +72,7 @@ function LoginForm() {
       <form onSubmit={handleSubmit} className="mt-6 space-y-4">
         <div>
           <label className="block text-xs font-bold text-slate-700">
-            Téléphone (10 chiffres) ou Email
+            Numéro de téléphone ou Email
           </label>
           <div className="relative mt-1.5 flex items-center">
             <Phone className="absolute left-3.5 h-4 w-4 text-slate-400" />
@@ -81,7 +81,7 @@ function LoginForm() {
               required
               value={identifier}
               onChange={(e) => setIdentifier(e.target.value)}
-              placeholder="Ex: 0701020304 ou email"
+              placeholder="ex: 0701020304 ou votre@email.ci"
               className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/50 pl-10 pr-4 text-sm font-medium text-slate-900 outline-none transition focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-500/20"
             />
           </div>
@@ -105,7 +105,7 @@ function LoginForm() {
         <button
           type="submit"
           disabled={loading}
-          className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 font-bold text-white shadow-md shadow-emerald-600/20 transition hover:bg-emerald-700 active:scale-98 disabled:opacity-50"
+          className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 font-bold text-white shadow-md shadow-emerald-600/20 transition hover:bg-emerald-700 active:scale-98 disabled:opacity-50 mt-2"
         >
           {loading ? (
             <Loader2 className="h-5 w-5 animate-spin" />
@@ -118,7 +118,7 @@ function LoginForm() {
         </button>
       </form>
 
-      <div className="mt-8 border-t border-slate-100 pt-6 text-center text-xs text-slate-500">
+      <div className="mt-6 border-t border-slate-100 pt-5 text-center text-xs text-slate-500">
         <p>Pas encore inscrit ?</p>
         <div className="mt-2 flex justify-center gap-4">
           <Link

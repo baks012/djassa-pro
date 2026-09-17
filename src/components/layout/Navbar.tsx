@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { ShieldCheck, User as UserIcon, LogOut, PlusCircle, LayoutDashboard } from "lucide-react";
+import { ShieldCheck, User as UserIcon, LogOut, PlusCircle, LogIn } from "lucide-react";
 
 interface UserSession {
   id: string;
@@ -76,10 +76,10 @@ export const Navbar = () => {
               {user.role === "admin" && (
                 <Link
                   href="/admin"
-                  className="flex items-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 transition"
+                  className="flex items-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800 shadow-sm transition"
                 >
-                  <LayoutDashboard className="h-3.5 w-3.5 text-emerald-400" />
-                  <span>Admin</span>
+                  <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Administration</span>
                 </Link>
               )}
 
@@ -89,8 +89,14 @@ export const Navbar = () => {
                   className="flex items-center gap-1.5 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition"
                 >
                   <UserIcon className="h-3.5 w-3.5" />
-                  <span>Mon Espace</span>
+                  <span>Mon Espace ({user.prenom || "Pro"})</span>
                 </Link>
+              )}
+
+              {user.role === "client" && (
+                <span className="text-xs font-bold text-slate-700 px-2">
+                  Bonjour, {user.prenom || "Client"}
+                </span>
               )}
 
               <button
@@ -105,9 +111,10 @@ export const Navbar = () => {
             <div className="flex items-center gap-2">
               <Link
                 href="/connexion"
-                className="rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+                className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition shadow-sm"
               >
-                Connexion
+                <LogIn className="h-3.5 w-3.5 text-slate-500" />
+                <span>Connexion</span>
               </Link>
               <Link
                 href="/inscription/prestataire"

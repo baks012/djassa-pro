@@ -39,6 +39,13 @@ function PrestatairesDirectoryContent() {
   }, [query, commune, onlyVerified]);
 
   useEffect(() => {
+    const q = searchParams.get("query") || "";
+    const c = searchParams.get("commune") || "Toutes les communes";
+    setQuery(q);
+    setCommune(c);
+  }, [searchParams]);
+
+  useEffect(() => {
     fetchProviders();
   }, [fetchProviders]);
 

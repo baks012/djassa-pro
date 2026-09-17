@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
+import { MockDb } from "@/lib/mock-db";
 import { getCurrentUser } from "@/lib/auth";
+import { supabaseAdmin } from "@/lib/supabase";
 
 export async function POST(request: Request) {
   try {
@@ -12,58 +13,142 @@ export async function POST(request: Request) {
       );
     }
 
-    const { providerId, estVerifie, motifRejet } = await request.json();
+    const body = await request.json();
+    const { providerId, action, estVerifie, motifRejet } = body;
 
-    if (!providerId || typeof estVerifie !== "boolean") {
+    if (!providerId) {
       return NextResponse.json(
-        { success: false, message: "Paramètres invalides." },
+        { success: false, message: "Identifiant du prestataire manquant." },
         { status: 400 }
       );
     }
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const profile = await tx.profile.update({
-        where: { userId: providerId },
-        data: {
-          estVerifie,
-          kycStatus: estVerifie ? "VERIFIE" : "REJETE",
-        },
-      });
+    let resultStatus = "VERIFIE";
+    let message = "";
+    const now = new Date().toISOString();
 
-      // Mettre à jour le statut du document KYC
-      await tx.kycDocument.updateMany({
-        where: { providerId },
-        data: {
-          statut: estVerifie ? "VERIFIE" : "REJETE",
-          motifRejet: estVerifie ? null : motifRejet || "Document non conforme ou illisible",
-          reviewedAt: new Date(),
-        },
-      });
+    if (action === "REJECT" || estVerifie === false) {
+      const reason = motifRejet?.trim() || "Demande d'inscription ou pièce rejetée par l'administrateur.";
+      
+      // 1. Mise à jour Supabase
+      try {
+        const [resUser, resProfile, resKyc] = await Promise.all([
+          supabaseAdmin.from("users").update({ is_active: false }).eq("id", providerId),
+          supabaseAdmin.from("profiles").update({
+            est_verifie: false,
+            kyc_status: "REJETE",
+            disponible: false,
+            updated_at: now,
+          }).eq("user_id", providerId),
+          supabaseAdmin.from("kyc_documents").update({
+            statut: "REJETE",
+            motif_rejet: reason,
+            reviewed_at: now,
+          }).eq("provider_id", providerId),
+        ]);
 
-      // Journal d'audit obligatoire en cybersécurité
-      await tx.adminAuditLog.create({
-        data: {
-          adminId: session.id,
-          action: estVerifie ? "VALIDATE_PROVIDER_BADGE" : "REJECT_PROVIDER_BADGE",
-          targetId: providerId,
-          details: JSON.stringify({ estVerifie, motifRejet }),
-        },
-      });
+        if (resUser.error) console.error("[SUPABASE_REJECT_USER_ERR]", resUser.error);
+        if (resProfile.error) console.error("[SUPABASE_REJECT_PROFILE_ERR]", resProfile.error);
+        if (resKyc.error) console.error("[SUPABASE_REJECT_KYC_ERR]", resKyc.error);
 
-      return profile;
-    });
+        // Audit log
+        await supabaseAdmin.from("admin_audit_logs").insert({
+          admin_id: session.id,
+          action: "REJECT_PROVIDER",
+          target_id: providerId,
+          details: `Motif de rejet: ${reason}`,
+        });
+      } catch (err) {
+        console.warn("[ADMIN_VERIFY] Supabase reject error:", err);
+      }
+
+      // 2. Mise à jour MockDb (résilience)
+      MockDb.rejectProvider(providerId, reason);
+      resultStatus = "REJETE";
+      message = "Demande du prestataire rejetée. Le profil est immédiatement masqué de l'annuaire public.";
+    } else if (action === "ACTIVATE") {
+      // 1. Mise à jour Supabase
+      try {
+        const [resUser, resProfile] = await Promise.all([
+          supabaseAdmin.from("users").update({ is_active: true }).eq("id", providerId),
+          supabaseAdmin.from("profiles").update({
+            kyc_status: "NON_VERIFIE",
+            disponible: true,
+            updated_at: now,
+          }).eq("user_id", providerId),
+        ]);
+
+        if (resUser.error) console.error("[SUPABASE_ACTIVATE_USER_ERR]", resUser.error);
+        if (resProfile.error) console.error("[SUPABASE_ACTIVATE_PROFILE_ERR]", resProfile.error);
+
+        // Audit log
+        await supabaseAdmin.from("admin_audit_logs").insert({
+          admin_id: session.id,
+          action: "ACTIVATE_PROVIDER",
+          target_id: providerId,
+          details: "Réactivation du compte prestataire par l'administrateur",
+        });
+      } catch (err) {
+        console.warn("[ADMIN_VERIFY] Supabase activate error:", err);
+      }
+
+      // 2. Mise à jour MockDb
+      MockDb.activateProvider(providerId);
+      resultStatus = "NON_VERIFIE";
+      message = "Profil prestataire réactivé avec succès.";
+    } else {
+      // 1. Mise à jour Supabase (Approbation & Badge Vérifié)
+      try {
+        const [resUser, resProfile, resKyc] = await Promise.all([
+          supabaseAdmin.from("users").update({ is_active: true }).eq("id", providerId),
+          supabaseAdmin.from("profiles").update({
+            est_verifie: true,
+            kyc_status: "VERIFIE",
+            disponible: true,
+            updated_at: now,
+          }).eq("user_id", providerId),
+          supabaseAdmin.from("kyc_documents").update({
+            statut: "VERIFIE",
+            motif_rejet: null,
+            reviewed_at: now,
+          }).eq("provider_id", providerId),
+        ]);
+
+        if (resUser.error) console.error("[SUPABASE_APPROVE_USER_ERR]", resUser.error);
+        if (resProfile.error) console.error("[SUPABASE_APPROVE_PROFILE_ERR]", resProfile.error);
+        if (resKyc.error) console.error("[SUPABASE_APPROVE_KYC_ERR]", resKyc.error);
+
+        // Audit log
+        await supabaseAdmin.from("admin_audit_logs").insert({
+          admin_id: session.id,
+          action: "APPROVE_PROVIDER",
+          target_id: providerId,
+          details: "Validation du dossier et attribution du badge vérifié",
+        });
+      } catch (err) {
+        console.warn("[ADMIN_VERIFY] Supabase approve error:", err);
+      }
+
+      // 2. Mise à jour MockDb
+      MockDb.approveProvider(providerId);
+      resultStatus = "VERIFIE";
+      message = "Prestataire validé et badge vérifié activé avec succès.";
+    }
+
+    const updatedProfile = MockDb.findProfileByUserId(providerId);
+    const updatedUser = MockDb.findUserById(providerId);
 
     return NextResponse.json({
       success: true,
-      message: estVerifie
-        ? "Badge Vérifié attribué avec succès."
-        : "Vérification rejetée.",
-      profile: updated,
+      message,
+      status: resultStatus,
+      profile: updatedProfile,
+      isActive: updatedUser?.is_active ?? true,
     });
   } catch (error) {
     console.error("[ADMIN_VERIFY_PROVIDER_ERROR]", error);
     return NextResponse.json(
-      { success: false, message: "Erreur lors de la mise à jour du statut." },
+      { success: false, message: "Erreur lors de la modération du prestataire." },
       { status: 500 }
     );
   }
